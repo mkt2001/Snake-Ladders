@@ -1,0 +1,77 @@
+name: Build Godot APK and Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: 4.2.2
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.2.2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Unzip project
+        id: find
+        run: |
+          command -v unzip >/dev/null || (apt-get update -y && apt-get install -y unzip)
+          mkdir -p _src
+          unzip -q -o SnakeLadder3D_Godot.zip -d _src
+          P=$(dirname "$(find _src -name project.godot | head -1)")
+          echo "Project path: $P"
+          echo "path=$P" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Godot and Android
+        run: |
+          mkdir -v -p ~/.local/share/godot/export_templates/
+          mkdir -v -p ~/.config/godot/
+          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable || true
+          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+          mv debug.keystore /root/debug.keystore
+          godot -v -e --quit --headless || true
+          echo 'export/android/android_sdk_path = "/usr/lib/android-sdk"' >> ~/.config/godot/editor_settings-4.tres
+          echo 'export/android/debug_keystore = "/root/debug.keystore"' >> ~/.config/godot/editor_settings-4.tres
+          echo 'export/android/debug_keystore_user = "androiddebugkey"' >> ~/.config/godot/editor_settings-4.tres
+          echo 'export/android/debug_keystore_pass = "android"' >> ~/.config/godot/editor_settings-4.tres
+          echo 'export/android/force_system_user = false' >> ~/.config/godot/editor_settings-4.tres
+          echo 'export/android/shutdown_adb_on_exit = true' >> ~/.config/godot/editor_settings-4.tres
+
+      - name: Export APK
+        run: |
+          cd "${{ steps.find.outputs.path }}"
+          mkdir -p build
+          godot -v --headless --import || true
+          godot -v --headless --export-debug "Android" build/SnakeLadder3D.apk
+          ls -la build
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SnakeLadder3D-APK
+          path: ${{ steps.find.outputs.path }}/build/SnakeLadder3D.apk
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: SnakeLadder3D-APK
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Snake & Ladder 3D v${{ github.run_number }}
+          body: "Snake & Ladder 3D - Ultimate Edition (Godot). APK neeche Assets me hai."
+          files: SnakeLadder3D.apk
